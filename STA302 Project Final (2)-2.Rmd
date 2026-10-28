@@ -1,0 +1,811 @@
+---
+title: "STA302 Project Final"
+output: pdf_document
+date: "2025-10-22"
+geometry: margin=0.5in
+bibliography: references.bib
+csl: apa.csl
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,      
+  warning = FALSE,   
+  message = FALSE   
+)
+library(haven)
+library(dplyr)
+library(tidyr)
+library(dplyr)
+library(tibble)
+library(moments)
+library(ggplot2)
+library(MASS)
+library(car)
+library(stats)
+```
+
+```{r}
+nhanes <- read.csv("nhanes_hba1c_dataset.csv")
+```
+
+## Introduction
+
+The global rise in prediabetes and impaired glucose tolerance highlights an urgent public health concern, with an estimated 37% of U.S. adults older than 20 and 51% of those older than 65 affected [@bansal2015]. Glycated hemoglobin (HbA1c), a form of hemoglobin chemically bound to glucose, reflects average blood glucose levels over an extended period and is a standard biomarker for long-term glycemic control [@who2011]. Elevated HbA1c levels indicate poor glucose regulation and are widely used in diagnosing and monitoring diabetes and related metabolic disorders. Understanding how demographic and dietary factors influence HbA1c is essential for improving preventive care and guiding personalized nutritional strategies.
+
+This project examines whether a linear relationship exists between HbA1c levels and demographic and dietary factors. Multiple linear regression will be applied to assess how variables such as age, sex, race, body mass index, and dietary intake, including total energy, protein, carbohydrate, sugar, fibre, fat, caffeine, and alcohol, contribute to HbA1c variation. A linear model is appropriate because it estimates the independent effect of each factor while controlling for others and enables statistical inference through hypothesis testing and confidence intervals. The findings may benefit individuals seeking to optimize dietary habits and clinicians aiming to identify modifiable risk factors for improved glycemic control.
+
+Previous research on diet and HbA1c has yielded mixed evidence. Energy balance and food source appear to influence the effects of fructose-containing sugars on glycemic control [@choo2018]. Reducing carbohydrate intake improved HbA1c among individuals with Type 2 diabetes [@mongkolsucharitkul2025], while high-protein, high-fat, and low-carbohydrate diets stabilized glucose fluctuations in the general population, though effects were weaker among those without diabetes [@ekberg2024]. Soluble dietary fibre supplementation significantly reduced HbA1c in Type 2 diabetes [@xie2020], and higher consumption of fruits and leafy vegetables was associated with lower HbA1c, independent of fibre or vitamin C intake [@sargeant2001]. Lifestyle factors also contribute: moderate alcohol consumption has been linked to lower HbA1c [@gulliford2001], though this was not observed in Type 1 diabetes [@balk2015]. The effect of caffeine remains uncertain, with no association reported in general populations [@gooley2018], whereas caffeine-induced sleep reduction may elevate HbA1c in Type 2 diabetes [@minari2025].
+
+## Data Description
+
+The NHANES dataset contains complete data without missing values. Several predictors, including BMI, sugar, fat, and caffeine intake, show moderate to strong right skew and high variance, suggesting potential need for transformation. Outliers are present in dietary intake variables, with unusually high maximum values, though flagged outliers are minimal.
+
+Age is slightly skewed and well-distributed, while race and gender are balanced across major categories. These characteristics support robust modelling but warrant attention to non-normality and scale differences.
+
+We combine multiple datasets from the 2021-2023 NHANES collection cycle and pick out variables that are clinically meaningful to explore. In this analytic extract (n $\approx$ 5,787), HbA1c has mean 5.75, SD 1.01, median 5.50, range 4.1–16.2, and is right-skewed (skew $\approx$ 3.46) with most values between 5% and 7%. While some outliers exist (e.g., individuals with poorly controlled diabetes), the variable remains suitable for linear modeling since HbA1c is continuous on an interval scale and observations are independent by design, as each row represents a unique individual.
+
+```{r}
+y <- nhanes$hba1c[!is.na(nhanes$hba1c)]
+
+resp_summary <- tibble(
+  n = length(y),
+  mean = mean(y), sd = sd(y), median = median(y),
+  min = min(y), max = max(y),
+  skew = skewness(y)    
+) |> mutate(across(where(is.numeric), ~round(.x, 2)))
+print(resp_summary)
+
+
+# histogram + density overlay
+ggplot(data.frame(hba1c = y), aes(hba1c)) +
+  geom_histogram(aes(y = ..density..), bins = 40, fill = "grey80", color = "white") +
+  geom_density(linewidth = 1) +
+  labs(title = "HbA1c Distribution", x = "HbA1c (%)", y = "Density") +
+  theme_minimal()
+```
+
+## Preliminary Results (Model from Part 1)
+
+Our preliminary model is a linear regression model with all 12 predictor variables and an interaction term between Race and Age. 
+
+```{r, fig.width=15, fig.height=10}
+
+prelim <- lm(hba1c ~ Age + factor(Gender) + factor(Race) + BMI + TEnergyIntake + TProteinIntake + TCarbIntake + TSugarIntake + TFibreIntake + TFat + TCaffeine + TAlcohol + Age:Race, data = nhanes)
+summary(prelim)
+
+```
+
+Observing VIF results, we notice that multiple variables have high GVIF values (TEnergyIntake, TFat, TCarbIntake, TProteinIntake), indicating multicollinearity and likely violating the uncorrelated errors assumption. However, there are no strong non-linear relationships between any variables suggesting that the conditional mean predictor condition is satisfied. 
+
+Moreover, we can see from the Fitted vs. HbA1c graph that while there is a slight deviation from the $Y = \hat Y$ line, the overall trend of the graph heavily overlaps the $45^\circ$ line. Thus, the conditional mean response condition is satisfied and we can draw conclusions from our residual plots.
+
+```{r}
+e_hat_prelim <- residuals(prelim)
+y_hat_prelim <- fitted(prelim)
+
+vif_prelim <- vif(prelim)
+vif_prelim
+
+pairs(nhanes[,c(3,4,5,6,7,8,9,10,11,12,13,14)])
+
+plot(nhanes$hba1c ~ y_hat_prelim, ylab = "HbA1c", xlab = "Fitted", main="Prelim. Model: Hba1c vs Fitted", col=rgb(0, 0, 0, alpha=0.3), pch=16, cex=0.5)
+abline(a = 0, b = 1, col = "red", lwd = 4, lty = 2) 
+abline(lm(nhanes$hba1c ~ y_hat_prelim), col = "blue", lwd = 2)
+
+legend("topleft",
+       legend = c("Y = Predicted Y", "Trend line"),
+       col = c("red", "blue"),
+       lwd = 2,
+       bty = "n")
+```
+
+Observing our residual plots, we notice that there is a “fan” pattern present in multiple graphs, suggesting that the constant variance assumption is also violated. There is a large deviation from the desired straight line, thus, the normality assumption is also violated. Lastly, the mean of residuals is approximately 0, indicating linearity.
+
+```{r}
+par(mfrow=c(1,2))
+plot(e_hat_prelim ~ y_hat_prelim, ylab="Residuals", xlab="Fitted",
+     col=rgb(0, 0, 0, alpha=0.3), pch=16, cex=0.5,
+     main="Prelim. Model: Residuals vs Fitted")
+abline(h = 0, col = "red", lwd = 2, lty = 2)
+
+for(i in c(3,4,5,6,7,8,9,10,11,12,13)){
+  plot(e_hat_prelim ~ nhanes[,i], ylab="Residuals", xlab=names(nhanes)[i], 
+       col=rgb(0, 0, 0, alpha=0.3), pch=16,
+       main=paste("Prelim. Model: Residuals vs", names(nhanes)[i]), cex=0.5)
+  abline(h = mean(e_hat_prelim), col = "red", lwd = 2, lty = 2)
+}
+
+qqnorm(e_hat_prelim)
+qqline(e_hat_prelim)
+```
+
+Our preliminary model violates multiple linear assumptions and disagrees with the findings of our literature. This is probably due to the collinearity between the dietary intake variables and violated assumptions.
+
+## Model Transformations
+
+We will start by attempting to "correct" the violated constant variance assumption. 
+
+(1) Alcohol and caffeine intake were measured using a single 24-hour dietary recall. Because these are episodic behaviors, many habitual users may report zero intake simply because they did not consume these items on the recall day, creating a large group of people with 0 intake and substantial day-to-day variability. Combined with a highly skewed distribution and a few extreme intake reports, this produces strong measurement error and high-influence points that distort linear regression estimates [@subar2015]. To reduce noise, we will change alcohol and caffeine intake as binary indicators of any consumption versus none.
+```{r}
+nhanes$TAlcohol_bin  <- ifelse(nhanes$TAlcohol  == 0, 0, 1)
+nhanes$TCaffeine_bin <- ifelse(nhanes$TCaffeine == 0, 0, 1)
+nhanes$TAlcohol_bin  <- factor(nhanes$TAlcohol_bin , levels = c(0, 1))
+nhanes$TCaffeine_bin <- factor(nhanes$TCaffeine_bin, levels = c(0, 1))
+table(nhanes$TAlcohol_bin)
+table(nhanes$TCaffeine_bin)
+```
+
+(2) We will attempt a inverse-transformation on our response variable, hba1c, in an attempt to stabilize the variance.
+```{r}
+hba1c_inv <- 1/(nhanes$hba1c)
+
+model_1 <- lm(hba1c_inv ~ Age + factor(Gender) + factor(Race) + BMI + TEnergyIntake + TProteinIntake + TCarbIntake + TSugarIntake + TFibreIntake + TFat + TCaffeine_bin + TAlcohol_bin + Age:Race, data = nhanes)
+summary(model_1)
+```
+
+```{r}
+pairs(nhanes[,c(3,4,5,6,7,8,9,10,11,12,15,16)]) # 15, 16 are columns for TAlcohol_bin and TCaffeine_bin
+
+plot(hba1c_inv ~ y_hat_1, ylab = "1/HbA1c", xlab = "Fitted", col=rgb(0, 0, 0, alpha=0.3), pch=16, cex=0.5,main="Model 1: 1/Hba1c vs Fitted")
+abline(a = 0, b = 1, col = "red", lwd = 4, lty = 2) 
+abline(lm(hba1c_inv ~ y_hat_1), col = "blue", lwd = 2)
+
+legend("topleft",
+       legend = c("1/Y = Predicted Y", "Trend line"),
+       col = c("red", "blue"),
+       lwd = 2,
+       bty = "n")
+```
+
+From the above plots, we can see that the conditional mean predictor and mean response conditions needed to draw conclusions from residual plots remains satisfied after the inverse-transformation on Y. 
+```{r}
+par(mfrow=c(1,2))
+plot(e_hat_1 ~ y_hat_1, ylab="Residuals", xlab="Fitted",
+     col=rgb(0, 0, 0, alpha=0.3), pch=16,
+     main="Inv. Y: Residuals vs Fitted",  cex=0.5)
+abline(h = 0, col = "red", lwd = 2, lty = 2)
+
+for(i in c(3,4,5,6,7,8,9,10,11,12,15,16)){
+  plot(e_hat_1 ~ nhanes[,i], ylab="Residuals", xlab=names(nhanes)[i], 
+       col=rgb(0, 0, 0, alpha=0.3), pch=16,
+       main=paste("Inv. Y: Residuals vs", names(nhanes)[i]), cex=0.5)
+  abline(h = mean(e_hat_1), col = "red", lwd = 2, lty = 2)
+}
+
+qqnorm(e_hat_1, main="Inv. Model: Normal Q-Q Plot")
+qqline(e_hat_1)
+```
+
+Observing our residual plots after the transformation, we notice that there are still “fan” patterns present in multiple graphs, suggesting that the constant variance assumption remains violated. The Normal Q-Q plot also shows a slight S-curve, suggesting that normality is violated.
+
+(3) Evidently, the inverse transformation did not fully stabilize our variance. We will now apply a location shift of 3. This shift was chosen empirically to attempt to stablize variance. 
+
+```{r}
+hba1c_inv_shift <- 1/(nhanes$hba1c - 3)
+
+model_2 <- lm(hba1c_inv_shift ~ Age + factor(Gender) + factor(Race) + BMI + TEnergyIntake + TProteinIntake + TCarbIntake + TSugarIntake + TFibreIntake + TFat + TCaffeine_bin + TAlcohol_bin + Age:Race, data = nhanes)
+summary(model_2)
+```
+
+```{r}
+plot(hba1c_inv_shift ~ y_hat_2, ylab = "1/(HbA1c - 3)", xlab = "Fitted", main="Model 2: 1/(Hba1c - 3) vs Fitted", col=rgb(0, 0, 0, alpha=0.3), pch=16, cex=0.5)
+abline(a = 0, b = 1, col = "red", lwd = 4, lty = 2) 
+abline(lm(hba1c_inv_shift ~ y_hat_2), col = "blue", lwd = 2)
+
+legend("topleft",
+       legend = c("1/(Y-3) = Predicted Y", "Trend line"),
+       col = c("red", "blue"),
+       lwd = 2,
+       bty = "n")
+```
+
+From the above plot and the previous pair plot (no predictor variables changed), we can see that the conditional mean predictor and mean response conditions needed to draw conclusions from residual plots remains satisfied after the inverse-transformation on Y. 
+
+```{r}
+par(mfrow=c(1,2))
+plot(e_hat_2 ~ y_hat_2, ylab="Residuals", xlab="Fitted",
+     col=rgb(0, 0, 0, alpha=0.3), pch=16,
+     main="Inv. (Y-3): Residuals vs Fitted",  cex=0.5)
+abline(h = 0, col = "red", lwd = 2, lty = 2)
+
+for(i in c(3,4,5,6,7,8,9,10,11,12,15,16)){
+  plot(e_hat_2 ~ nhanes[,i], ylab="Residuals", xlab=names(nhanes)[i], 
+       col=rgb(0, 0, 0, alpha=0.3), pch=16,
+       main=paste("Inv. (Y-3): Residuals vs", names(nhanes)[i]), cex=0.5)
+  abline(h = mean(e_hat_2), col = "red", lwd = 2, lty = 2)
+}
+
+qqnorm(e_hat_2, main="Inv. Model: Normal Q-Q Plot")
+qqline(e_hat_2)
+```
+Observing our residual plots after the transformation, we notice that there are still “fan” patterns present in multiple graphs but they seem to be "spreading out", suggesting that the constant variance assumption is less violated. The Normal Q-Q plot also shows a S-curve, suggesting that normality is still violated.
+
+(4) However, the residual versus different predictors still show strong violation of constant variance. We will now look at our predictor variables in order to determine transformations should be conducted on the predictor variables. Looking at the distribution of each variable:
+
+```{r}
+nutrients <- c("Age", "BMI",
+               "TEnergyIntake",
+               "TProteinIntake",
+               "TCarbIntake",
+               "TSugarIntake",
+               "TFibreIntake",
+               "TFat")
+
+par(mfrow=c(3,2)) 
+for (var in nutrients) {
+  hist(nhanes[[var]],
+       main = paste("Histogram of", var),
+       xlab = var,
+       col = "lightblue",
+       breaks = 30)
+}
+```
+
+We observe severe skewness in predictors ("BMI", TEnergyIntake", "TProteinIntake", "TCarbIntake", "TSugarIntake", "TFibreIntake", "TFat"). Therefore, we will now conduct a power-transformation on the predictor variables.
+
+Age shows little skewness and gender and race is a categorical predictor; therefore, they were not included in the transformation.
+
+```{r}
+pt <- powerTransform(cbind(nhanes[, 6:12] + 1))
+summary(pt)
+```
+
+The results indicated that optimal powers for all the variables is between 0.2 and 0.44. We will apply a cube-root transformation to each variable as this will still provide appropriate variance stabilization while simplifying interpretation.
+
+```{r}
+nutrients <- c("TEnergyIntake", "TProteinIntake", "TCarbIntake",
+               "TSugarIntake", "TFibreIntake", "TFat")
+nhanes[, paste0(nutrients, "_cube_root")] <- lapply(nhanes[, nutrients], function(x) x^(1/3))
+nhanes[, "BMI_square_root_i"] <- (nhanes$BMI)^(-0.5)
+```
+
+(5) Using our transformed predictor variables:
+```{r}
+model_3 <- lm(hba1c_inv_shift ~ Age + factor(Gender) + factor(Race) + BMI_square_root_i + TEnergyIntake_cube_root + TProteinIntake_cube_root + TCarbIntake_cube_root + TSugarIntake_cube_root + TFibreIntake_cube_root + TFat_cube_root +                         TCaffeine_bin + TAlcohol_bin + Age:Race, data = nhanes)
+summary(model_3)
+```
+
+```{r}
+e_hat_3 <- residuals(model_3)
+y_hat_3 <- fitted(model_3)
+
+vif_3 <- vif(model_3)
+vif_3
+
+pairs(nhanes[,c(3,4,5,17,18,19,20,21,22,23,15,16)])
+
+plot(hba1c_inv_shift ~ y_hat_3, ylab = "1/(HbA1c - 3)", xlab = "Fitted v2", col=rgb(0, 0, 0, alpha=0.3), pch=16, cex=0.5, main="Model 3: 1/(Hba1c - 3) vs Fitted v2")
+abline(a = 0, b = 1, col = "red", lwd = 4, lty = 2) 
+abline(lm(hba1c_inv_shift ~ y_hat_3), col = "blue", lwd = 2)
+
+legend("topleft",
+       legend = c("1/(Y-3) = Predicted Y", "Trend line v2"),
+       col = c("red", "blue"),
+       lwd = 2,
+       bty = "n")
+```
+
+From the above plot and the previous pair plot (no predictor variables changed), we can see that the conditional mean predictor and mean response conditions needed to draw conclusions from residual plots remains satisfied after the inverse-transformation on Y. 
+
+```{r}
+par(mfrow=c(1,2))
+plot(e_hat_3 ~ y_hat_3, ylab="Residuals", xlab="Fitted",
+     col=rgb(0, 0, 0, alpha=0.3), pch=16,
+     main="Inv. (Y-3): Residuals vs Fitted v2",  cex=0.5)
+abline(h = 0, col = "red", lwd = 2, lty = 2)
+
+for(i in c(3,4,5,23,17,18,19,20,21,22,15,16)){
+  plot(e_hat_3 ~ nhanes[,i], ylab="Residuals", xlab=names(nhanes)[i], 
+       col=rgb(0, 0, 0, alpha=0.3), pch=16,
+       main=paste("Inv. (Y-3) v2: Residuals vs", names(nhanes)[i]), cex=0.5)
+  abline(h = mean(e_hat_3), col = "red", lwd = 2, lty = 2)
+}
+
+qqnorm(e_hat_3, main="Inv. Model: Normal Q-Q Plot")
+qqline(e_hat_3)
+```
+
+Observing our residual plots after the transformation, we notice that the “fan” patterns are much less defined, suggesting that the constant variance assumption is only slightly violated. The Normal Q-Q plot also shows a S-curve, suggesting that normality is still violated.
+Prior work [@schmidt2018] shows that with large sample sizes, modest departures from normality typically have little impact on inference for linear models, so we proceeded under this justification.
+
+(6) We will use the VIF results from model_3 to attempt to remove some variables to decrease multicollinearity. Looking at the VIF values, TEnergyIntake_cube_root has a very high score comparatively and this makes sense as it is calculated with other nutrition variables such as TCarbIntake_cube_root, TProteinIntake_cube_root, etc. We will hold off on removing the other nutrition variables with higher VIF as we hope the removal of TEnergyIntake_cube_root will help lower those scores. We will also remove the Age:Race interaction term as the VIF is a bit higher and the Age VIF is also a bit higher. It make more sense in terms of interpretability to remove Age:Race.
+
+```{r}
+model_4 <- lm(hba1c_inv_shift ~ Age + factor(Gender) + factor(Race) + BMI_square_root_i + TProteinIntake_cube_root + TCarbIntake_cube_root + TSugarIntake_cube_root + TFibreIntake_cube_root + TFat_cube_root +                         TCaffeine_bin + TAlcohol_bin, data = nhanes)
+summary(model_4)
+```
+
+```{r}
+e_hat_4 <- residuals(model_4)
+y_hat_4 <- fitted(model_4)
+
+vif_4 <- vif(model_4)
+vif_4
+
+pairs(nhanes[,c(3,4,5,23,18,19,20,21,22,15,16)])
+
+plot(hba1c_inv_shift ~ y_hat_4, ylab = "1/(HbA1c - 3)", xlab = "Fitted v3", col=rgb(0, 0, 0, alpha=0.3), pch=16, cex=0.5, main="Model 4: 1/(Hba1c - 3) vs Fitted v3")
+abline(a = 0, b = 1, col = "red", lwd = 4, lty = 2) 
+abline(lm(hba1c_inv_shift ~ y_hat_4), col = "blue", lwd = 2)
+
+legend("topleft",
+       legend = c("1/(Y-3) = Predicted Y", "Trend line v3"),
+       col = c("red", "blue"),
+       lwd = 2,
+       bty = "n")
+```
+
+```{r}
+par(mfrow=c(1,1))
+plot(e_hat_4 ~ y_hat_4, ylab="Residuals", xlab="Fitted",
+     col=rgb(0, 0, 0, alpha=0.3), pch=16,
+     main="Inv. (Y-3): Residuals vs Fitted v3",  cex=0.5)
+abline(h = 0, col = "red", lwd = 2, lty = 2)
+
+for(i in c(3,4,5,23,18,19,20,21,22,15,16)){
+  plot(e_hat_4 ~ nhanes[,i], ylab="Residuals", xlab=names(nhanes)[i], 
+       col=rgb(0, 0, 0, alpha=0.3), pch=16,
+       main=paste("Inv. (Y-3) v3: Residuals vs", names(nhanes)[i]), cex=0.5)
+  abline(h = mean(e_hat_4), col = "red", lwd = 2, lty = 2)
+}
+
+qqnorm(e_hat_4, main="Inv. Shift Model v3: Normal Q-Q Plot")
+qqline(e_hat_4)
+```
+
+```{r}
+anova(model_4, model_3)
+```
+```{r}
+data.frame(
+  Model = c("Model 4", "Model 3"),
+  Adj_R2 = c(summary(model_4)$adj.r.squared, summary(model_3)$adj.r.squared),
+  AIC = AIC(model_4, model_3)$AIC,
+  BIC = BIC(model_4, model_3)$BIC
+)
+```
+Justification:
+Although the F-test suggested that TEnergyIntake contributes significantly, we removed it from the final model. TEnergyIntake is a composite variable highly collinear with other nutrients variables, which makes coefficients difficult to interpret and inflates significance. Given our emphasis on inference and interpretability rather than predictive accuracy, and considering the high measurement error associated with 24-hour energy intake recall [@banna2017], we concluded that TEnergyIntake should be excluded from the final model.
+
+(8) Try to remove TCarbIntake_cube_root because of high VIF 
+```{r}
+model_5 <- lm(hba1c_inv_shift ~ Age + factor(Gender) + factor(Race) + BMI_square_root_i + TProteinIntake_cube_root + TSugarIntake_cube_root + TFibreIntake_cube_root + TFat_cube_root + TCaffeine_bin + TAlcohol_bin, data = nhanes)
+summary(model_5)
+
+```
+
+```{r}
+e_hat_5 <- residuals(model_5)
+y_hat_5 <- fitted(model_5)
+
+vif_5 <- vif(model_5)
+vif_5
+
+high_vif5 <- names(vif_5[vif_5 > 5])
+high_vif5
+
+pairs(nhanes[,c(3,4,5,23,18,20,21,22,15,16)])
+
+plot(hba1c_inv_shift ~ y_hat_5, ylab = "1/(HbA1c - 3)", xlab = "Fitted v4", col=rgb(0, 0, 0, alpha=0.3), pch=16, cex=0.5, main="Model 5: 1/(Hba1c - 3) vs Fitted v4")
+abline(a = 0, b = 1, col = "red", lwd = 4, lty = 2) 
+abline(lm(hba1c_inv_shift ~ y_hat_5), col = "blue", lwd = 2)
+
+legend("topleft",
+       legend = c("1/(Y-3) = Predicted Y", "Trend line v4"),
+       col = c("red", "blue"),
+       lwd = 2,
+       bty = "n")
+```
+
+```{r}
+par(mfrow=c(1,1))
+plot(e_hat_5 ~ y_hat_5, ylab="Residuals", xlab="Fitted",
+     col=rgb(0, 0, 0, alpha=0.3), pch=16,
+     main="Inv. (Y-3): Residuals vs Fitted v4",  cex=0.5)
+abline(h = 0, col = "red", lwd = 2, lty = 2)
+
+for(i in c(3,4,5,23,18,20,21,22,15,16)){
+  plot(e_hat_5 ~ nhanes[,i], ylab="Residuals", xlab=names(nhanes)[i], 
+       col=rgb(0, 0, 0, alpha=0.3), pch=16,
+       main=paste("Inv. (Y-3) v4: Residuals vs", names(nhanes)[i]), cex=0.5)
+  abline(h = mean(e_hat_5), col = "red", lwd = 2, lty = 2)
+}
+
+qqnorm(e_hat_5, main="Inv. Shift Model v4: Normal Q-Q Plot")
+qqline(e_hat_5)
+
+```
+
+```{r}
+anova(model_5, model_4)
+```
+```{r}
+data.frame(
+  Model = c("Model 5", "Model 4"),
+  Adj_R2 = c(summary(model_5)$adj.r.squared, summary(model_4)$adj.r.squared),
+  AIC = AIC(model_5, model_4)$AIC,
+  BIC = BIC(model_5, model_4)$BIC
+)
+```
+Decision: not to remove TCarbIntake_cube_root as the VIF is not significantly large and the ANOVA suggests adding TCarbIntake_cube_root leads to a statistically significant improvement in model fit.
+
+(10) Try to remove TAlcohol_bin and TCaffein_bin
+```{r}
+model_7 <- lm(hba1c_inv_shift ~ Age + factor(Gender) + BMI_square_root_i + TProteinIntake_cube_root + TCarbIntake_cube_root +  TSugarIntake_cube_root + TFibreIntake_cube_root + TFat_cube_root, data = nhanes)
+summary(model_7)
+```
+
+```{r}
+e_hat_7 <- residuals(model_7)
+y_hat_7 <- fitted(model_7)
+
+vif_7 <- vif(model_7)
+vif_7
+
+high_vif7 <- names(vif_7[vif_7 > 5])
+high_vif7
+
+pairs(nhanes[,c(3,4,23,18,20,21,22)])
+
+plot(hba1c_inv_shift ~ y_hat_7, ylab = "1/(HbA1c - 3)",col=rgb(0, 0, 0, alpha=0.3), pch=16, cex=0.5, xlab = "Fitted v6", main="Model 7: 1/(Hba1c - 3) vs Fitted v6")
+abline(a = 0, b = 1, col = "red", lwd = 4, lty = 2) 
+abline(lm(hba1c_inv_shift ~ y_hat_7), col = "blue", lwd = 2)
+
+legend("topleft",
+       legend = c("1/(Y-3) = Predicted Y", "Trend line v6"),
+       col = c("red", "blue"),
+       lwd = 2,
+       bty = "n")
+
+```
+
+```{r}
+par(mfrow=c(1,1))
+plot(e_hat_7 ~ y_hat_7, ylab="Residuals", xlab="Fitted",
+     col=rgb(0, 0, 0, alpha=0.3), pch=16,
+     main="Inv. (Y-3): Residuals vs Fitted v6",  cex=0.5)
+abline(h = 0, col = "red", lwd = 2, lty = 2)
+
+for(i in c(3,4,23,18,20,21,22)){
+  plot(e_hat_7 ~ nhanes[,i], ylab="Residuals", xlab=names(nhanes)[i], 
+       col=rgb(0, 0, 0, alpha=0.3), pch=16,
+       main=paste("Inv. (Y-3) v6: Residuals vs", names(nhanes)[i]), cex=0.5)
+  abline(h = mean(e_hat_7), col = "red", lwd = 2, lty = 2)
+}
+
+qqnorm(e_hat_7, main="Inv. Shift Model v6: Normal Q-Q Plot")
+qqline(e_hat_7)
+```
+
+```{r}
+anova(model_7, model_6)
+
+```
+```{r}
+data.frame(
+  Model = c("Model 7", "Model 6"),
+  Adj_R2 = c(summary(model_7)$adj.r.squared, summary(model_6)$adj.r.squared),
+  AIC = AIC(model_7, model_6)$AIC,
+  BIC = BIC(model_7, model_6)$BIC
+)
+```
+Decision: Not remove TAlcohol_bin and TCaffein_bin because of the same justification.
+
+The reason why we do not use automated variable selection is because we want to maintain substantive interpretability and avoid unstable estimates.
+```{r}
+stepAIC(lm(hba1c_inv_shift ~ Age + factor(Gender) + factor(Race) + BMI_square_root_i + TProteinIntake_cube_root + TSugarIntake_cube_root + TFibreIntake_cube_root + TFat_cube_root +                         TCaffeine_bin + TAlcohol_bin, data = nhanes), 
+        scope=list(lower=lm(hba1c_inv_shift ~ 1, data=nhanes)), 
+        direction = "backward", k=2)
+```
+
+## Problematic Points of Original Model (prelim)
+```{r}
+n <- nrow(nhanes)
+p <- length(coef(prelim)) - 1
+
+# cutoffs
+hcut     <- 2 * (p + 1) / n
+cookcut  <- qf(0.5, df1 = p + 1, df2 = n - p - 1)
+fitcut   <- 2 * sqrt((p + 1) / n)
+betacut  <- 2 / sqrt(n)
+
+# diagnostics
+h_ii      <- hatvalues(prelim)
+r_i       <- rstandard(prelim)
+D_i       <- cooks.distance(prelim)
+dffits_i  <- dffits(prelim)
+dfbetas_i <- dfbetas(prelim)
+
+diag_df <- data.frame(
+  index = 1:n,
+  leverage = h_ii,
+  rstandard = r_i,
+  cooksD = D_i,
+  dffits = dffits_i,
+  dfbetas_large = apply(abs(dfbetas_i) > betacut, 1, sum)
+)
+
+# Flag points that exceed any cutoff
+diag_df$flag_leverage <- diag_df$leverage > hcut
+diag_df$flag_r        <- abs(diag_df$rstandard) > 2 
+diag_df$flag_cooksD   <- diag_df$cooksD > cookcut
+diag_df$flag_dffits   <- abs(diag_df$dffits) > fitcut
+diag_df$flag_dfbetas  <- diag_df$dfbetas_large > 0
+
+# Count how many flags each observation has
+diag_df$flag_sum <- rowSums(diag_df[, c("flag_leverage","flag_r","flag_cooksD",                                 "flag_dffits","flag_dfbetas")])
+                                        
+# Show problematic points
+problem_points <- subset(diag_df, flag_sum > 0)
+problem_points
+```
+
+```{r}
+# Plot problematic points and see if they share some pattern: different colors represent different number of flags
+flag_colors <- colorRampPalette(c("yellow", "orange", "red", "purple"))(
+  max(problem_points$flag_sum)
+)
+res <- resid(prelim)
+fit <- fitted(prelim)
+# plot problematic points on top
+plot(fit, res,
+     pch = 16,
+     cex = 0.6,
+     col = rgb(0.5, 0.5, 0.5, 0.5),
+     xlab = "Fitted values",
+     ylab = "Residuals",
+     main = "Residuals vs Fitted")
+
+points(fit[problem_points$index],
+       res[problem_points$index],
+       pch = 16,
+       col = flag_colors[problem_points$flag_sum],
+       cex = 0.6)
+
+legend("topright",
+       legend = paste0(1:max(problem_points$flag_sum), " flags"),
+       col = flag_colors,
+       pch = 19,
+       title = "Severity (# of flags)")
+
+df <- data.frame(fit = fit, res = res)
+df$flag_sum <- 0
+df$flag_sum[problem_points$index] <- problem_points$flag_sum
+```
+
+## Problematic Points for Final Model
+```{r}
+n2 <- nrow(nhanes)
+p2 <- length(coef(model_7)) - 1
+
+# cutoffs
+hcut     <- 2 * (p2 + 1) / n2
+cookcut  <- qf(0.5, df1 = p2 + 1, df2 = n2 - p2 - 1)
+fitcut   <- 2 * sqrt((p2 + 1) / n2)
+betacut  <- 2 / sqrt(n2)
+
+# diagnostics
+h_ii      <- hatvalues(model_7)
+r_i       <- rstandard(model_7)
+D_i       <- cooks.distance(model_7)
+dffits_i  <- dffits(model_7)
+dfbetas_i <- dfbetas(model_7)
+
+diag_df <- data.frame(
+  index = 1:n2,
+  leverage = h_ii,
+  rstandard = r_i,
+  cooksD = D_i,
+  dffits = dffits_i,
+  dfbetas_large = apply(abs(dfbetas_i) > betacut, 1, sum)
+)
+
+# Flag points that exceed any cutoff
+diag_df$flag_leverage <- diag_df$leverage > hcut
+diag_df$flag_r        <- abs(diag_df$rstandard) > 2 
+diag_df$flag_cooksD   <- diag_df$cooksD > cookcut
+diag_df$flag_dffits   <- abs(diag_df$dffits) > fitcut
+diag_df$flag_dfbetas  <- diag_df$dfbetas_large > 0
+
+# Count how many flags each observation has
+diag_df$flag_sum <- rowSums(diag_df[, c("flag_leverage","flag_r","flag_cooksD",
+                                        "flag_dffits","flag_dfbetas")])
+                                        
+# Show problematic points
+problem_points2 <- subset(diag_df, flag_sum > 0)
+problem_points2
+```
+
+```{r}
+flag_colors <- colorRampPalette(c("yellow", "orange", "red", "purple"))(
+  max(problem_points2$flag_sum)
+)
+resr4 <- resid(model_7)
+fitr4 <- fitted(model_7)
+# plot problematic points on top
+plot(fitr4, resr4,
+     pch = 16,
+     cex = 0.5,
+     col = rgb(0.5, 0.5, 0.5, 0.5),
+     xlab = "Fitted values",
+     ylab = "Residuals",
+     main = "Residuals vs Fitted")
+
+points(fitr4[problem_points2$index],
+       resr4[problem_points2$index],
+       pch = 16,
+       col = flag_colors[problem_points2$flag_sum],
+       cex = 0.5)
+
+legend("topright",
+       legend = paste0(1:max(problem_points2$flag_sum), " flags"),
+       col = flag_colors,
+       pch = 19,
+       title = "Severity (# of flags)")
+
+df <- data.frame(fitr4 = fitr4, resr4 = resr4)
+df$flag_sum <- 0
+df$flag_sum[problem_points2$index] <- problem_points2$flag_sum
+
+```
+
+## Problem Points: Original vs. Final
+```{r}
+# Count seriously problematic points 
+serious_before <- subset(problem_points, flag_sum > 3)
+serious_after  <- subset(problem_points2, flag_sum > 3)
+
+cat("Number of seriously problematic points BEFORE transformation:", 
+    nrow(serious_before), "\n")
+
+cat("Number of seriously problematic points AFTER transformation:",  
+    nrow(serious_after), "\n")
+
+# Find invariant problematic points
+before_idx <- problem_points$index
+after_idx  <- problem_points2$index
+
+invariant_points <- intersect(before_idx, after_idx)
+
+cat("Number of invariant problematic points:", length(invariant_points), "\n")
+cat("Which points are invariant problematic points:", invariant_points, "\n")
+
+#Optional: create a data frame summarizing them
+invariant_df <- merge(
+  subset(problem_points, index %in% invariant_points),
+  subset(problem_points2, index %in% invariant_points),
+  by = "index",
+  suffixes = c("_before", "_after")
+)
+
+invariant_df
+```
+```{r}
+# Plot the invariant problematic points
+flag_colors <- colorRampPalette(c("yellow", "orange", "red", "purple"))(
+  max(problem_points2$flag_sum)
+)
+# Base plot (all points in semi-transparent grey)
+plot(fitr4, resr4,
+     pch = 16,
+     cex = 0.5,
+     col = rgb(0.5, 0.5, 0.5, 0.5),
+     xlab = "Fitted values",
+     ylab = "Residuals",
+     main = "Residuals vs Fitted (Invariant Problematic Points Highlighted)")
+
+abline(h = 0, lty = 2, col = "black")
+
+# Highlight invariant problematic points
+points(fitr4[invariant_points],
+       resr4[invariant_points],
+       pch = 16,
+       col = flag_colors[problem_points2$flag_sum[match(invariant_points, problem_points2$index)]],
+       cex = 0.8) 
+
+legend("topright",
+       legend = paste0(1:max(problem_points2$flag_sum), " flags"),
+       col = flag_colors,
+       pch = 16,
+       title = "Severity (# of flags)")
+```
+Slight fan shape + gap in 3 flags for negative residuals in the fitted values range 0.035 to 0.045. We want to see whether they show similar characteristics.
+```{r}
+fan_idx <- problem_points2$index[
+  problem_points2$flag_sum == 3 & resr4[problem_points2$index] < -0.01
+]
+
+cat("Fan-shaped problematic point indices:\n")
+print(fan_idx)
+fan_points_df <- nhanes[fan_idx, ]
+
+fan_points_df$fitted_r4   <- fitr4[fan_idx]
+fan_points_df$residual_r4 <- resr4[fan_idx]
+fan_points_df$flag_sum    <- problem_points2$flag_sum[
+  match(fan_idx, problem_points2$index)
+]
+
+fan_points_df
+```
+
+```{r}
+# Summarize the data and compare it with the population
+summary(fan_points_df)
+summary(nhanes)
+# Plot the distributions of these points (response, predictors) to see if they have specific properties
+vars_to_compare <- c(
+  "hba1c","Age", "BMI",
+  "TEnergyIntake", "TProteinIntake", "TCarbIntake",
+  "TSugarIntake", "TFibreIntake", "TFat",
+  "TCaffeine", "TAlcohol"
+)
+
+nhanes_sub <- nhanes %>%
+  dplyr::select(all_of(vars_to_compare)) %>%
+  mutate(group = "population")
+
+fan_sub <- fan_points_df %>%
+  dplyr::select(all_of(vars_to_compare)) %>%
+  mutate(group = "fan")
+
+for (v in vars_to_compare) {
+  fan_sub[[v]] <- as(fan_sub[[v]], class(nhanes_sub[[v]]))
+}
+combined <- bind_rows(nhanes_sub, fan_sub)
+
+combined_long <- combined %>%
+  pivot_longer(cols = all_of(vars_to_compare),
+               names_to = "variable",
+               values_to = "value")
+
+ggplot(combined_long, aes(x = value, fill = group)) +
+  geom_density(alpha = 0.4) +
+  facet_wrap(~ variable, scales = "free") +
+  theme_bw() +
+  labs(title = "Distribution Comparison: Population vs Fan Points")
+```
+## Model Validation
+Our model was trained on data from the August 2021 - August 2023 two-year cycle of NHANES data (nhanes). We will use data from the 2017-2018 two-year cycle (nhanes_validation). Both data sets have the same variables and are of similar size (5556 observations in nhanes and 5787 observations in nhanes_validation).
+
+Note: We use the 2017 - 2018 cycle as the 2019-2020 cycle is incomplete due to the COVID pandemic and the 2021 - 2023 cycle starts in August as operations were closed due to the pandemic at the beginning of 2021.
+
+```{r}
+nhanes_validation <- read.csv("nhanes_hba1c_dataset_validation.csv")
+
+# 0 = no intake, 1 = any intake
+nhanes_validation$TAlcohol_bin  <- ifelse(nhanes_validation$TAlcohol  == 0, 0, 1)
+nhanes_validation$TCaffeine_bin <- ifelse(nhanes_validation$TCaffeine == 0, 0, 1)
+nhanes_validation$TAlcohol_bin  <- factor(nhanes_validation$TAlcohol_bin , levels = c(0, 1))
+nhanes_validation$TCaffeine_bin <- factor(nhanes_validation$TCaffeine_bin, levels = c(0, 1))
+
+# Conduct required transformations
+nutrients2 <- c("TEnergyIntake", "TProteinIntake", "TCarbIntake",
+               "TSugarIntake", "TFibreIntake", "TFat")
+nhanes_validation[, paste0(nutrients2, "_cube_root")] <- lapply(nhanes_validation[, nutrients2], function(x) x^(1/3))
+hba1c_inv_shift2 <- 1/(nhanes_validation$hba1c - 3)
+
+# Model
+model_validation <- lm(hba1c_inv_shift2 ~ Age + factor(Gender) + BMI + 
+            TProteinIntake_cube_root + TSugarIntake_cube_root + TFibreIntake_cube_root + TFat_cube_root, data = nhanes_validation)
+summary(model_validation)
+
+e_hat_validation <- residuals(model_validation)
+y_hat_validation <- fitted(model_validation)
+
+par(mfrow=c(1,1))
+plot(e_hat_validation ~ y_hat_validation, ylab="Residuals", xlab="Fitted",
+     col=rgb(0, 0, 0, alpha=0.3), pch=16, cex=0.5,
+     main="Validation: Residuals vs Fitted")
+abline(h = 0, col = "red", lwd = 2, lty = 2)
+
+for(i in c(3,4,5,6,18,19,20,21,22,15,16)){
+  plot(e_hat_validation ~ nhanes_validation[,i], ylab="Residuals", xlab=names(nhanes_validation)[i], 
+       col=rgb(0, 0, 0, alpha=0.3), pch=16,
+       main=paste("Validation: Residuals vs", names(nhanes_validation)[i]), cex=0.5)
+  abline(h = mean(e_hat_validation), col = "red", lwd = 2, lty = 2)
+}
+
+qqnorm(e_hat_validation, main="Validation: Normal Q-Q Plot")
+qqline(e_hat_validation)
+```
